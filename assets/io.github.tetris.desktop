@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Tetris
+Comment=A focused falling-block game
+Exec=tetris
+Icon=io.github.tetris
+Terminal=false
+Categories=Game;ArcadeGame;
+StartupNotify=true

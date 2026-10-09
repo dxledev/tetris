@@ -1,0 +1,25 @@
+{
+    "colors": {
+        "accent": "#315c48",
+        "background": "#f4f1e9",
+        "board": "#f3f0e7",
+        "border": "#ddd8cb",
+        "danger": "#b9423b",
+        "ghost": "#ccdfcc",
+        "grid": "#9aab9b",
+        "muted": "#6f7970",
+        "piece_i": "#238b9b",
+        "piece_j": "#4b67b2",
+        "piece_l": "#c56b2b",
+        "piece_o": "#c28b23",
+        "piece_s": "#52803a",
+        "piece_t": "#8a57a6",
+        "piece_z": "#c44748",
+        "selection": "#eeeee1",
+        "surface": "#fffcf5",
+        "surface_alt": "#ebe7dd",
+        "text": "#292f2c"
+    },
+    "name": "paper",
+    "version": 1
+}

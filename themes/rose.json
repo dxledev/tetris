@@ -1,0 +1,25 @@
+{
+    "colors": {
+        "accent": "#efb7ce",
+        "background": "#211a22",
+        "board": "#332833",
+        "border": "#4e3a4c",
+        "danger": "#ed8796",
+        "ghost": "#654258",
+        "grid": "#85687f",
+        "muted": "#b8a0b2",
+        "piece_i": "#91d7e3",
+        "piece_j": "#8aadf4",
+        "piece_l": "#f5a97f",
+        "piece_o": "#eed49f",
+        "piece_s": "#a6da95",
+        "piece_t": "#c6a0f6",
+        "piece_z": "#ee99a0",
+        "selection": "#3b2c3b",
+        "surface": "#2c232e",
+        "surface_alt": "#382d3b",
+        "text": "#f7eaf1"
+    },
+    "name": "rose",
+    "version": 1
+}

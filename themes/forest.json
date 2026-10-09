@@ -1,0 +1,25 @@
+{
+    "colors": {
+        "accent": "#b6e3c6",
+        "background": "#101819",
+        "board": "#152522",
+        "border": "#304243",
+        "danger": "#e07a70",
+        "ghost": "#355c4b",
+        "grid": "#536967",
+        "muted": "#91a6a2",
+        "piece_i": "#72d6d2",
+        "piece_j": "#7fa9ef",
+        "piece_l": "#f3a65a",
+        "piece_o": "#f4d35e",
+        "piece_s": "#8cd790",
+        "piece_t": "#c69bee",
+        "piece_z": "#ef7777",
+        "selection": "#203230",
+        "surface": "#182324",
+        "surface_alt": "#1e2d2e",
+        "text": "#edf3ed"
+    },
+    "name": "forest",
+    "version": 1
+}

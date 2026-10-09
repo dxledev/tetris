@@ -1,0 +1,25 @@
+{
+    "colors": {
+        "accent": "#b2c7ff",
+        "background": "#131720",
+        "board": "#202838",
+        "border": "#34405a",
+        "danger": "#ee7788",
+        "ghost": "#3b4e78",
+        "grid": "#576986",
+        "muted": "#97a3be",
+        "piece_i": "#65c9d8",
+        "piece_j": "#7298ee",
+        "piece_l": "#eea161",
+        "piece_o": "#e8c56a",
+        "piece_s": "#82c98f",
+        "piece_t": "#c09af4",
+        "piece_z": "#e77882",
+        "selection": "#252e44",
+        "surface": "#1c2230",
+        "surface_alt": "#252e40",
+        "text": "#ebeffa"
+    },
+    "name": "slate",
+    "version": 1
+}
