@@ -145,6 +145,8 @@ void SettingsModal::open(const Preferences &preferences) {
 }
 
 void SettingsModal::save() {
+    if (isClosing())
+        return;
     for (auto *spin : {moveDelay_, moveRepeat_, softDrop_, lockDelay_})
         spin->interpretText();
     draft_.showGhost = ghost_->isChecked();

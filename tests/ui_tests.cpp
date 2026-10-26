@@ -1,6 +1,7 @@
 #include "core/storage.h"
 #include "core/theme.h"
 #include "ui/window.h"
+#include "ui/modal_motion.h"
 #include "ui/preferences.h"
 #include "ui/stats.h"
 
@@ -16,7 +17,9 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTimeLine>
 #include <QtTest>
+#include <QtCore/qscopeguard.h>
 
 using namespace tetris;
 
@@ -27,9 +30,25 @@ QString executable;
 void capture(Window &window, const QString &name) {
     const auto directory = qEnvironmentVariable("TETRIS_TEST_CAPTURE_DIR");
     if (!directory.isEmpty()) {
+        QTest::qWait(ModalMotion::duration + 60);
         QDir().mkpath(directory);
         window.grab().save(directory + "/" + name + ".png");
     }
+}
+
+// GPU compositing may round a channel by one step, which is invisible.
+bool sameFrame(const QImage &a, const QImage &b) {
+    if (a.size() != b.size() || a.format() != b.format())
+        return false;
+    for (int y = 0; y < a.height(); ++y) {
+        const auto *left = reinterpret_cast<const QRgb *>(a.constScanLine(y));
+        const auto *right = reinterpret_cast<const QRgb *>(b.constScanLine(y));
+        for (int x = 0; x < a.width(); ++x)
+            if (qAbs(qRed(left[x]) - qRed(right[x])) > 2 || qAbs(qGreen(left[x]) - qGreen(right[x])) > 2
+                || qAbs(qBlue(left[x]) - qBlue(right[x])) > 2)
+                return false;
+    }
+    return true;
 }
 
 Preferences testPreferences() {
@@ -50,6 +69,11 @@ private slots:
     void modalSaveCancelResizeAndLiveTheme();
     void statsRankScoresPauseAndLiveTheme();
     void statsRecordEachGameOnce();
+    void modalOpensAndClosesWithoutFlashing();
+    void modalClosesCleanlyAfterResizeAndThemeChange();
+    void modalReversesMidFlight();
+    void modalIgnoresRepeatedSaveWhileClosing();
+    void reducedMotionSkipsTheFade();
 };
 
 void UiTests::playPauseAndResize() {
@@ -154,8 +178,8 @@ void UiTests::embeddedModalsBlockGameplay() {
     auto *content = window.findChild<QWidget *>("content");
     auto *settingsButton = window.findChild<QPushButton *>("settingsButton");
     QVERIFY(settings && controls && content && settingsButton);
-    QVERIFY(!settings->isVisible());
-    QVERIFY(!controls->isVisible());
+    QTRY_VERIFY(!settings->isVisible());
+    QTRY_VERIFY(!controls->isVisible());
     QTest::keyClick(&window, Qt::Key_F1);
     QVERIFY(controls->isVisible());
     QVERIFY(!controls->isWindow());
@@ -163,7 +187,7 @@ void UiTests::embeddedModalsBlockGameplay() {
     QVERIFY(!content->isEnabled());
     capture(window, "controls-modal");
     QTest::mouseClick(controls->findChild<QPushButton *>("controlsCloseButton"), Qt::LeftButton);
-    QVERIFY(!controls->isVisible());
+    QTRY_VERIFY(!controls->isVisible());
     QVERIFY(content->isEnabled());
     QVERIFY(window.game().isPaused());
     QTest::keyClick(&window, Qt::Key_Return);
@@ -193,14 +217,14 @@ void UiTests::embeddedModalsBlockGameplay() {
     QVERIFY(!QApplication::activePopupWidget());
     capture(window, "settings-modal");
     QTest::keyClick(settings->findChild<QSpinBox *>("prefsMoveDelaySpin"), Qt::Key_Escape);
-    QVERIFY(!settings->isVisible());
+    QTRY_VERIFY(!settings->isVisible());
     QVERIFY(content->isEnabled());
     QVERIFY(window.game().isRunning());
     QTest::keyClick(&window, Qt::Key_P);
     QTest::keyClick(&window, Qt::Key_F1);
     QVERIFY(controls->isVisible());
     QTest::mouseClick(controls, Qt::LeftButton, Qt::NoModifier, QPoint(5, 5));
-    QVERIFY(!controls->isVisible());
+    QTRY_VERIFY(!controls->isVisible());
     QVERIFY(window.game().isPaused());
     window.close();
 }
@@ -220,7 +244,7 @@ void UiTests::modalSaveCancelResizeAndLiveTheme() {
     delay->setValue(345);
     ghost->setChecked(false);
     QTest::mouseClick(settings->findChild<QPushButton *>("modalSaveButton"), Qt::LeftButton);
-    QVERIFY(!settings->isVisible());
+    QTRY_VERIFY(!settings->isVisible());
     QCOMPARE(loadPreferences(temporary.path()).moveDelayMs, 345);
     QVERIFY(!loadPreferences(temporary.path()).showGhost);
     QVERIFY(window.game().isPaused());
@@ -229,6 +253,7 @@ void UiTests::modalSaveCancelResizeAndLiveTheme() {
     QVERIFY(!ghost->isChecked());
     delay->setValue(600);
     QTest::mouseClick(settings->findChild<QPushButton *>("modalCancelButton"), Qt::LeftButton);
+    QTRY_VERIFY(!settings->isVisible());
     QCOMPARE(loadPreferences(temporary.path()).moveDelayMs, 345);
     QTest::mouseClick(button, Qt::LeftButton);
     window.resize(640, 600);
@@ -253,7 +278,7 @@ void UiTests::modalSaveCancelResizeAndLiveTheme() {
     QTest::mouseClick(delay, Qt::RightButton);
     QVERIFY(!QApplication::activePopupWidget());
     QTest::keyClick(delay, Qt::Key_Return);
-    QVERIFY(!settings->isVisible());
+    QTRY_VERIFY(!settings->isVisible());
     QVERIFY(window.findChild<QWidget *>("content")->isEnabled());
     window.close();
 }
@@ -271,7 +296,7 @@ void UiTests::statsRankScoresPauseAndLiveTheme() {
     auto *statsButton = window.findChild<QPushButton *>("statsButton");
     auto *content = window.findChild<QWidget *>("content");
     QVERIFY(stats && statsButton && content);
-    QVERIFY(!stats->isVisible());
+    QTRY_VERIFY(!stats->isVisible());
     QTest::keyClick(&window, Qt::Key_Return);
     QTest::keyClick(&window, Qt::Key_Space);
     const auto score = window.game().score();
@@ -341,17 +366,17 @@ void UiTests::statsRankScoresPauseAndLiveTheme() {
     QVERIFY(stats->isVisible());
     capture(window, "stats-modal-paper");
     QTest::keyClick(&window, Qt::Key_Escape);
-    QVERIFY(!stats->isVisible());
+    QTRY_VERIFY(!stats->isVisible());
     QVERIFY(content->isEnabled());
     QVERIFY(window.game().isRunning());
     QTest::mouseClick(statsButton, Qt::LeftButton);
     QTest::mouseClick(close, Qt::LeftButton);
-    QVERIFY(!stats->isVisible());
+    QTRY_VERIFY(!stats->isVisible());
     QVERIFY(window.game().isRunning());
     QTest::keyClick(&window, Qt::Key_P);
     QTest::mouseClick(statsButton, Qt::LeftButton);
     QTest::mouseClick(stats, Qt::LeftButton, Qt::NoModifier, QPoint(5, 5));
-    QVERIFY(!stats->isVisible());
+    QTRY_VERIFY(!stats->isVisible());
     QVERIFY(window.game().isPaused());
     window.close();
 }
@@ -374,7 +399,7 @@ void UiTests::statsRecordEachGameOnce() {
     QVERIFY(card->rect().contains(QRect(last->mapTo(card, QPoint()), last->size())));
     capture(window, "stats-modal-empty-compact");
     QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
-    QVERIFY(!stats->isVisible());
+    QTRY_VERIFY(!stats->isVisible());
     QVERIFY(window.game().isPaused());
     QTest::keyClick(&window, Qt::Key_Return);
     QTest::keyClick(&window, Qt::Key_Space);
@@ -386,6 +411,7 @@ void UiTests::statsRecordEachGameOnce() {
     QTest::mouseClick(statsButton, Qt::LeftButton);
     QCOMPARE(first->text(), QLocale().toString(static_cast<qulonglong>(endlessScore)));
     QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+    QTRY_VERIFY(!stats->isVisible());
     QTest::keyClick(&window, Qt::Key_Space);
     for (auto *tab : window.findChildren<QPushButton *>("modeTab"))
         if (tab->text() == "Classic")
@@ -416,6 +442,179 @@ void UiTests::statsRecordEachGameOnce() {
     QTest::keyClick(&nextWindow, Qt::Key_Return);
     nextWindow.close();
     QCOMPARE(loadRecords(temporary.path()).endlessScores.size(), std::size_t(3));
+}
+
+void UiTests::modalOpensAndClosesWithoutFlashing() {
+    QTemporaryDir temporary;
+    Window window(temporary.path(), ensureTheme(temporary.filePath("theme.json")), testPreferences(), 42);
+    window.show();
+    QTest::qWait(80);
+    auto *settings = window.findChild<SettingsModal *>("settingsModal");
+    auto *button = window.findChild<QPushButton *>("settingsButton");
+    QVERIFY(settings && button);
+    auto *motion = settings->findChild<ModalMotion *>();
+    QVERIFY(motion);
+    const auto before = window.grab().toImage();
+
+    button->click();
+    QVERIFY(settings->isVisible());
+    QCOMPARE(motion->progress(), 0.0);
+    // The backdrop is up but nothing has faded in yet: the window must look untouched.
+    QVERIFY(sameFrame(window.grab().toImage(), before));
+
+    QTest::qWait(ModalMotion::duration / 2);
+    QVERIFY(motion->progress() > 0.0);
+    QVERIFY(!sameFrame(window.grab().toImage(), before));
+    QTRY_VERIFY(!motion->isRunning());
+    QCOMPARE(motion->progress(), 1.0);
+
+    QImage lastFrame;
+    QImage afterHide;
+    bool grabbed = false;
+    connect(motion, &ModalMotion::progressChanged, motion, [&](qreal progress) {
+        if (progress == 0.0 && settings->isVisible()) {
+            lastFrame = window.grab().toImage();
+            grabbed = true;
+        }
+    });
+    QTest::keyClick(settings->findChild<QSpinBox *>("prefsMoveDelaySpin"), Qt::Key_Escape);
+    QVERIFY(settings->isClosing());
+    QVERIFY(!window.findChild<QWidget *>("content")->isEnabled());
+    QTRY_VERIFY(!settings->isVisible());
+    afterHide = window.grab().toImage();
+    QVERIFY(grabbed);
+    QVERIFY(sameFrame(lastFrame, afterHide));
+    QVERIFY(sameFrame(afterHide, before));
+    window.close();
+}
+
+void UiTests::modalClosesCleanlyAfterResizeAndThemeChange() {
+    QTemporaryDir temporary;
+    Window window(temporary.path(), ensureTheme(temporary.filePath("theme.json")), testPreferences(), 42);
+    window.show();
+    QTest::qWait(80);
+    auto *stats = window.findChild<StatsModal *>("statsModal");
+    auto *button = window.findChild<QPushButton *>("statsButton");
+    QVERIFY(stats && button);
+    auto *motion = stats->findChild<ModalMotion *>();
+    QVERIFY(motion);
+
+    button->click();
+    QTRY_VERIFY(!motion->isRunning());
+    window.resize(700, 640);
+    QTest::qWait(80);
+    saveTheme(temporary.filePath("theme.json"), preset("paper"));
+    QTRY_COMPARE_WITH_TIMEOUT(window.theme().name, QString("paper"), 2000);
+    QTest::qWait(80);
+
+    QImage lastFrame;
+    bool grabbed = false;
+    connect(motion, &ModalMotion::progressChanged, motion, [&](qreal progress) {
+        if (progress == 0.0 && stats->isVisible()) {
+            lastFrame = window.grab().toImage();
+            grabbed = true;
+        }
+    });
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY(!stats->isVisible());
+    QVERIFY(grabbed);
+    // The backdrop must hand over to a page that already matches the new size and theme.
+    QVERIFY(sameFrame(lastFrame, window.grab().toImage()));
+    window.close();
+}
+
+void UiTests::modalReversesMidFlight() {
+    QTemporaryDir temporary;
+    Window window(temporary.path(), ensureTheme(temporary.filePath("theme.json")), testPreferences(), 42);
+    window.show();
+    QTest::qWait(80);
+    auto *settings = window.findChild<SettingsModal *>("settingsModal");
+    auto *button = window.findChild<QPushButton *>("settingsButton");
+    QVERIFY(settings && button);
+    auto *motion = settings->findChild<ModalMotion *>();
+    QVERIFY(motion);
+    auto *timeline = motion->findChild<QTimeLine *>("modalTimeline");
+    QVERIFY(timeline);
+    QCOMPARE(timeline->duration(), ModalMotion::duration);
+    QCOMPARE(timeline->easingCurve().type(), QEasingCurve::OutCubic);
+
+    button->click();
+    QTRY_VERIFY(!motion->isRunning());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY(motion->progress() < 0.9);
+    QVERIFY(settings->isClosing());
+    const auto midClose = motion->progress();
+    QVERIFY(midClose > 0.0);
+
+    // Reopening during the fade-out keeps the modal and reverses from where it is.
+    settings->open(Preferences{});
+    QVERIFY(!settings->isClosing());
+    QVERIFY(settings->isVisible());
+    QTRY_VERIFY(!motion->isRunning());
+    QCOMPARE(motion->progress(), 1.0);
+    QVERIFY(settings->isVisible());
+    QVERIFY(!window.findChild<QWidget *>("content")->isEnabled());
+
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY(!settings->isVisible());
+    QVERIFY(window.findChild<QWidget *>("content")->isEnabled());
+    window.close();
+}
+
+void UiTests::modalIgnoresRepeatedSaveWhileClosing() {
+    QTemporaryDir temporary;
+    Window window(temporary.path(), ensureTheme(temporary.filePath("theme.json")), testPreferences(), 42);
+    window.show();
+    QTest::qWait(80);
+    auto *settings = window.findChild<SettingsModal *>("settingsModal");
+    auto *button = window.findChild<QPushButton *>("settingsButton");
+    QVERIFY(settings && button);
+    auto *motion = settings->findChild<ModalMotion *>();
+    QVERIFY(motion);
+    QSignalSpy applied(settings, &SettingsModal::applied);
+    QSignalSpy dismissed(settings, &SettingsModal::dismissed);
+
+    button->click();
+    QTRY_VERIFY(!motion->isRunning());
+    auto *save = settings->findChild<QPushButton *>("modalSaveButton");
+    QVERIFY(save);
+    save->click();
+    QVERIFY(settings->isClosing());
+    save->click();
+    QTest::keyClick(QApplication::focusWidget() ? QApplication::focusWidget() : &window, Qt::Key_Return);
+    QTRY_VERIFY(!settings->isVisible());
+    QCOMPARE(applied.count(), 1);
+    QCOMPARE(dismissed.count(), 1);
+    window.close();
+}
+
+void UiTests::reducedMotionSkipsTheFade() {
+    const auto previous = qgetenv("TETRIS_REDUCED_MOTION");
+    const auto restore = qScopeGuard([previous] {
+        if (previous.isNull())
+            qunsetenv("TETRIS_REDUCED_MOTION");
+        else
+            qputenv("TETRIS_REDUCED_MOTION", previous);
+    });
+    qputenv("TETRIS_REDUCED_MOTION", "1");
+
+    QTemporaryDir temporary;
+    Window window(temporary.path(), ensureTheme(temporary.filePath("theme.json")), testPreferences(), 42);
+    window.show();
+    QTest::qWait(80);
+    auto *settings = window.findChild<SettingsModal *>("settingsModal");
+    auto *button = window.findChild<QPushButton *>("settingsButton");
+    QVERIFY(settings && button);
+    auto *motion = settings->findChild<ModalMotion *>();
+    QVERIFY(motion);
+    button->click();
+    QVERIFY(settings->isVisible());
+    QVERIFY(!motion->isRunning());
+    QCOMPARE(motion->progress(), 1.0);
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!settings->isVisible());
+    QVERIFY(window.findChild<QWidget *>("content")->isEnabled());
+    window.close();
 }
 
 int main(int argc, char **argv) {

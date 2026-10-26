@@ -73,6 +73,8 @@ tetris theme keys
 
 The default location is `${XDG_CONFIG_HOME:-~/.config}/tetris`. Override it with `--config-dir DIRECTORY` or `TETRIS_CONFIG_DIR` for both the app and the CLI.
 
+Settings, controls, and statistics panels fade and scale from 98% over 120 ms with an OutCubic curve, and the page behind them stays on screen the whole time. Set `TETRIS_REDUCED_MOTION=1` to make the transition instant. Native windows blend the frozen backdrop on the GPU; `TETRIS_MODAL_RENDERER=software` forces the software fallback, which offscreen sessions and systems without an OpenGL context use automatically.
+
 Exported themes are JSON objects with `version: 1`, a `name`, and a complete `colors` object. Use six-digit `#RRGGBB` colors. The included palettes show the full format.
 
 | Colors | Used for |

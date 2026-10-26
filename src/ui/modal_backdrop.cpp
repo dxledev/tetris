@@ -1,5 +1,8 @@
 #include "modal_backdrop.h"
 
+#include "modal_motion.h"
+#include "modal_surface.h"
+
 #include <QApplication>
 #include <QEvent>
 #include <QGraphicsBlurEffect>
@@ -13,6 +16,7 @@
 #include <QScopedValueRollback>
 #include <QShowEvent>
 #include <QHideEvent>
+#include <QTimer>
 #include <algorithm>
 #include <utility>
 
@@ -39,7 +43,13 @@ ModalBackdrop::ModalBackdrop(QWidget *parent, QWidget *background)
     setObjectName("modalBackdrop");
     setWindowFlags(Qt::Widget);
     setFocusPolicy(Qt::StrongFocus);
+    setAttribute(Qt::WA_NoSystemBackground);
     tint_ = QColor(0, 0, 0, 105);
+    if (ModalSurface::available()) {
+        // Created before the window is first shown so it never swaps the compositor mid-session.
+        surface_ = new ModalSurface(this);
+        surface_->setGeometry(rect());
+    }
     if (parentWidget())
         parentWidget()->installEventFilter(this);
     hide();
@@ -55,6 +65,18 @@ void ModalBackdrop::setCard(QWidget *card) {
         return;
     card_->setParent(this);
     card_->setObjectName("modalCard");
+    motion_ = new ModalMotion(card_);
+    card_->setGraphicsEffect(motion_);
+    connect(motion_, &ModalMotion::progressChanged, this, [this](qreal progress) {
+        if (surface_)
+            surface_->setProgress(progress);
+        if (!usesSurface())
+            update();
+    });
+    connect(motion_, &ModalMotion::finished, this, [this](bool open) {
+        if (!open && closing_)
+            finishDismiss();
+    });
     centerCard();
     card_->setVisible(isVisible());
     focusCard();
@@ -73,51 +95,103 @@ void ModalBackdrop::open() {
         if (parentWidget())
             setGeometry(parentWidget()->rect());
         raise();
+        if (closing_) {
+            closing_ = false;
+            if (card_)
+                card_->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+            if (motion_)
+                motion_->animate(true);
+        }
         focusCard();
         return;
     }
 
+    if (motion_)
+        motion_->reset();
+    beginOpen();
+    show();
+    raise();
+    centerCard();
+    focusCard();
+    if (motion_)
+        motion_->animate(true);
+}
+
+void ModalBackdrop::beginOpen() {
     previousFocus_ = QApplication::focusWidget();
     backgroundWasEnabled_ = background_ && background_->isEnabled();
+    backgroundUpdatesWereEnabled_ = background_ && background_->updatesEnabled();
     if (parentWidget())
         setGeometry(parentWidget()->rect());
     captureBackground();
     open_ = true;
     if (background_)
         background_->setEnabled(false);
+    freezeBackground();
     if (qApp)
         qApp->installEventFilter(this);
-    show();
-    raise();
-    centerCard();
-    focusCard();
 }
 
 void ModalBackdrop::dismiss() {
-    if (!open_ && !isVisible())
+    if (!open_ || closing_)
         return;
+    if (!isVisible() || !motion_) {
+        finishDismiss();
+        return;
+    }
+    closing_ = true;
+    if (card_)
+        card_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    motion_->animate(false);
+}
+
+void ModalBackdrop::finishDismiss() {
+    closing_ = false;
+    // Hand the page back while the opaque backdrop still covers it, so the
+    // restored content is repainted in the same frame the backdrop disappears.
+    restoreBackground();
     hide();
     emit dismissed();
 }
 
+void ModalBackdrop::freezeBackground() {
+    if (!background_ || backgroundFrozen_)
+        return;
+    background_->setUpdatesEnabled(false);
+    backgroundFrozen_ = true;
+}
+
+void ModalBackdrop::restoreBackground() {
+    if (!background_)
+        return;
+    if (open_ && background_->isEnabled() != backgroundWasEnabled_)
+        background_->setEnabled(backgroundWasEnabled_);
+    if (backgroundFrozen_)
+        background_->setUpdatesEnabled(backgroundUpdatesWereEnabled_);
+    backgroundFrozen_ = false;
+}
+
+bool ModalBackdrop::usesSurface() const {
+    return surface_ && surface_->isValid() && surface_->hasFrames();
+}
+
 void ModalBackdrop::paintEvent(QPaintEvent *) {
+    if (usesSurface() || backgroundFrame_.isNull() || snapshot_.isNull())
+        return;
     QPainter painter(this);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    painter.drawPixmap(rect(), snapshot_);
-    painter.fillRect(rect(), tint_);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.drawPixmap(QPointF(), backgroundFrame_);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.setOpacity(motion_ ? motion_->progress() : 1.0);
+    painter.drawPixmap(QPointF(), snapshot_);
 }
 
 void ModalBackdrop::showEvent(QShowEvent *event) {
     QWidget::showEvent(event);
     if (!open_) {
-        previousFocus_ = QApplication::focusWidget();
-        backgroundWasEnabled_ = background_ && background_->isEnabled();
-        open_ = true;
-        captureBackground();
-        if (background_)
-            background_->setEnabled(false);
-        if (qApp)
-            qApp->installEventFilter(this);
+        beginOpen();
+        if (motion_)
+            motion_->animate(true);
     }
     if (card_)
         card_->show();
@@ -130,11 +204,18 @@ void ModalBackdrop::hideEvent(QHideEvent *event) {
     if (qApp)
         qApp->removeEventFilter(this);
     clearSnapshot();
+    closing_ = false;
+    if (card_)
+        card_->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    if (motion_)
+        motion_->reset();
     restoreBackgroundAndFocus();
 }
 
 void ModalBackdrop::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
+    if (surface_)
+        surface_->setGeometry(rect());
     centerCard();
     if (isVisible())
         captureBackground();
@@ -161,8 +242,23 @@ void ModalBackdrop::keyPressEvent(QKeyEvent *event) {
 bool ModalBackdrop::eventFilter(QObject *watched, QEvent *event) {
     if (watched == parentWidget() && event->type() == QEvent::Resize && parentWidget())
         setGeometry(parentWidget()->rect());
+    if (surface_ && watched == parentWidget() && event->type() == QEvent::Show)
+        QTimer::singleShot(0, this, [this] { surface_->prewarm(); });
 
     auto *widget = qobject_cast<QWidget *>(watched);
+    if (closing_ && widget && (widget == this || isAncestorOf(widget))) {
+        switch (event->type()) {
+        case QEvent::ShortcutOverride:
+            event->accept();
+            return true;
+        case QEvent::KeyPress:
+        case QEvent::KeyRelease:
+        case QEvent::Wheel:
+            return true;
+        default:
+            break;
+        }
+    }
     if (open_ && widget && (widget == this || isAncestorOf(widget)) && event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
         if (keyEvent->key() == Qt::Key_Escape) {
@@ -185,6 +281,11 @@ void ModalBackdrop::captureBackground() {
     if (open_ && backgroundWasEnabled_ && !wasEnabled)
         background_->setEnabled(true);
 
+    // render() draws nothing while updates are disabled, so lift the freeze for the capture.
+    const bool wasFrozen = backgroundFrozen_;
+    if (wasFrozen)
+        background_->setUpdatesEnabled(true);
+
     const qreal devicePixelRatio = background_->devicePixelRatioF();
     QPixmap snapshot(background_->size() * devicePixelRatio);
     snapshot.setDevicePixelRatio(devicePixelRatio);
@@ -195,6 +296,9 @@ void ModalBackdrop::captureBackground() {
 
     if (background_->isEnabled() != wasEnabled)
         background_->setEnabled(wasEnabled);
+    if (wasFrozen)
+        background_->setUpdatesEnabled(false);
+    backgroundFrame_ = snapshot;
     storeBlurredSnapshot(snapshot);
 }
 
@@ -219,12 +323,28 @@ void ModalBackdrop::storeBlurredSnapshot(const QPixmap &snapshot) {
     QPainter painter(&blurred);
     scene.render(&painter, bounds, sourceBounds);
     painter.end();
-    snapshot_ = std::move(blurred);
+    // Fold the tint into the overlay so it fades in with the blur instead of popping.
+    const qreal devicePixelRatio = snapshot.devicePixelRatio();
+    QPixmap overlay(snapshot.size());
+    overlay.setDevicePixelRatio(devicePixelRatio);
+    overlay.fill(Qt::transparent);
+    QPainter overlayPainter(&overlay);
+    overlayPainter.setRenderHint(QPainter::SmoothPixmapTransform);
+    const QRect target(QPoint(), snapshot.deviceIndependentSize().toSize());
+    overlayPainter.drawPixmap(target, blurred);
+    overlayPainter.fillRect(target, tint_);
+    overlayPainter.end();
+    snapshot_ = std::move(overlay);
+    if (surface_)
+        surface_->setFrames(backgroundFrame_, snapshot_);
     update();
 }
 
 void ModalBackdrop::clearSnapshot() {
     snapshot_ = QPixmap();
+    backgroundFrame_ = QPixmap();
+    if (surface_)
+        surface_->clearFrames();
 }
 
 void ModalBackdrop::centerCard() {
@@ -260,9 +380,8 @@ void ModalBackdrop::focusCard() {
 }
 
 void ModalBackdrop::restoreBackgroundAndFocus() {
+    restoreBackground();
     open_ = false;
-    if (background_ && background_->isEnabled() != backgroundWasEnabled_)
-        background_->setEnabled(backgroundWasEnabled_);
     if (previousFocus_ && previousFocus_->isVisible() && previousFocus_->isEnabled())
         previousFocus_->setFocus(Qt::OtherFocusReason);
     previousFocus_.clear();

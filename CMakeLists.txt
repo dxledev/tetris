@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
 
 add_library(tetris_game src/core/game.cpp)
 set_target_properties(tetris_game PROPERTIES AUTOMOC OFF)
@@ -17,8 +17,9 @@ target_link_libraries(tetris_core PUBLIC tetris_game Qt6::Core Qt6::Gui)
 
 add_library(tetris_ui
     src/ui/board.cpp src/ui/piece_preview.cpp src/ui/preferences.cpp src/ui/modal_backdrop.cpp
+    src/ui/modal_motion.cpp src/ui/modal_surface.cpp
     src/ui/stats.cpp src/ui/theme_watcher.cpp src/ui/window.cpp)
-target_link_libraries(tetris_ui PUBLIC tetris_core Qt6::Widgets)
+target_link_libraries(tetris_ui PUBLIC tetris_core Qt6::Widgets Qt6::OpenGLWidgets)
 
 add_executable(tetris src/main.cpp src/cli.cpp)
 target_link_libraries(tetris PRIVATE tetris_ui)
