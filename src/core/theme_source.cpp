@@ -80,7 +80,9 @@ Palette qmlPalette(const QString &path) {
     while (matches.hasNext()) {
         const auto match = matches.next();
         if (!match.captured(2).isEmpty()) {
-            palette.insert(match.captured(1), opaqueColor(match.captured(2)));
+            QColor color(match.captured(2));
+            color.setAlpha(255);
+            palette.insert(match.captured(1), color);
             continue;
         }
         const auto channels = match.captured(3).split(',');

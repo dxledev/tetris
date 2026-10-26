@@ -22,6 +22,9 @@ class SourceTests : public QObject {
     Q_OBJECT
 private slots:
     void terminalColorsAndSemanticColors();
+    void qmlBackgroundFormats_data();
+    void qmlBackgroundFormats();
+    void jsonRgbaColorsKeepRgbOrder();
     void preferredAliasWins();
     void completeThemeTakesPriority();
 };
@@ -46,6 +49,51 @@ void SourceTests::terminalColorsAndSemanticColors() {
     QCOMPARE(semantic.color("piece_s"), QColor("#22aa33"));
     QCOMPARE(semantic.color("piece_o"), QColor("#ffcc22"));
     QCOMPARE(semantic.color("piece_t"), QColor("#123abc"));
+}
+
+void SourceTests::qmlBackgroundFormats_data() {
+    QTest::addColumn<QString>("expression");
+    QTest::addColumn<QString>("expected");
+
+    QTest::newRow("rgb") << "'#0e1e36'" << "#0e1e36";
+    QTest::newRow("akane-argb") << "\"#e00e1e36\"" << "#0e1e36";
+    QTest::newRow("transparent-argb") << "'#000e1e36'" << "#0e1e36";
+    QTest::newRow("opaque-argb") << "'#ff0e1e36'" << "#0e1e36";
+    QTest::newRow("uppercase-argb") << "'#E00E1E36'" << "#0e1e36";
+    QTest::newRow("fractional-rgba") << "Qt.rgba(14 / 255, 30 / 255, 54 / 255, 0.88)" << "#0e1e36";
+    QTest::newRow("decimal-rgba") << "Qt.rgba(0.2, 0.4, 0.6, 0.5)" << "#336699";
+}
+
+void SourceTests::qmlBackgroundFormats() {
+    QFETCH(QString, expression);
+    QFETCH(QString, expected);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto path = temporary.filePath("Colors.qml");
+    const auto qml = QString(
+        "readonly property color background: %1\n"
+        "readonly property color backgroundAlt: '#e01a2a46'\n"
+        "readonly property color foreground: '#f4b999'\n"
+        "readonly property color primary: '#9279aa'\n").arg(expression);
+    QVERIFY(writeText(path, qml.toUtf8()));
+
+    const auto followed = bindSource(preset("slate"), "static", temporary.path());
+    for (const auto &theme : {importPalette(path), followed, parseTheme(followed.toJson())}) {
+        QCOMPARE(theme.color("background"), QColor(expected));
+        QCOMPARE(theme.color("surface"), QColor("#1a2a46"));
+        QCOMPARE(theme.color("accent"), QColor("#9279aa"));
+        QCOMPARE(theme.color("text"), QColor("#f4b999"));
+        QCOMPARE(theme.color("background").alpha(), 255);
+    }
+}
+
+void SourceTests::jsonRgbaColorsKeepRgbOrder() {
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto path = temporary.filePath("palette.json");
+    const QJsonObject object{{"background", "#0e1e36e0"}, {"foreground", "#f4b999"}, {"primary", "#9279aa"}};
+    QVERIFY(writeText(path, QJsonDocument(object).toJson()));
+    QCOMPARE(importPalette(path).color("background"), QColor("#0e1e36"));
 }
 
 void SourceTests::preferredAliasWins() {
